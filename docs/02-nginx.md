@@ -33,10 +33,12 @@ O Nginx cumpre três funções:
 
 ## 2.2 Configuração final
 
-Arquivo `nginx.conf`, montado no contêiner em `/etc/nginx/conf.d/default.conf`:
+Arquivo `nginx/nginx.conf`. A pasta `nginx/` inteira é montada no contêiner em
+`/etc/nginx/conf.d/`:
 
 ```nginx
 upstream load_balancer {
+    least_conn;
     zone api 64k;
     resolver 127.0.0.11 valid=10s ipv6=off;
     server api:8080 resolve;
@@ -47,6 +49,10 @@ server {
 
     location / {
         proxy_pass http://load_balancer;
+    }
+
+    location = /metrics {
+        return 404;
     }
 }
 
@@ -69,6 +75,13 @@ O arquivo tem três blocos no mesmo nível, todos dentro do contexto `http` do
 | `server` na porta 80 | a loja, aberta para os clientes |
 | `server` na porta 8080 | a página de status, só para a rede interna |
 
+Duas diretivas foram adicionadas depois das primeiras versões:
+
+| Diretiva | Motivo | Seção |
+|---|---|---|
+| `least_conn` | com round-robin, algumas réplicas saturavam enquanto outras ficavam livres | 6 |
+| `location = /metrics { return 404; }` | a API passou a expor métricas em `/metrics`, que não devem ficar acessíveis de fora. O `=` é correspondência exata e tem prioridade sobre o `location /` | 4.5 |
+
 ### Por que substituir o `default.conf`
 
 A imagem oficial já traz um `/etc/nginx/conf.d/default.conf` com um `server`
@@ -77,8 +90,22 @@ adicionada **ao lado** dele, existem dois `server` na mesma porta, e o Nginx
 escolhe qual atende cada requisição comparando o cabeçalho `Host` com o
 `server_name` (*virtual hosting*). Como o `default.conf` declara
 `server_name localhost`, ele vencia as requisições para `localhost`, e a loja
-nunca era alcançada. Montar o arquivo **com o mesmo nome** substitui o
-original e elimina a disputa.
+nunca era alcançada.
+
+A solução final monta a **pasta** `nginx/` sobre `/etc/nginx/conf.d/`. Um bind
+mount não mistura conteúdos: ele **esconde** o que havia no destino e mostra só
+o que vem do host. O `default.conf` da imagem fica invisível, e o único `server`
+na porta 80 passa a ser o da loja.
+
+| | Bind de **arquivo** (primeira versão) | Bind de **pasta** (versão final) |
+|---|---|---|
+| Como elimina o `default.conf` | o arquivo precisa ser montado **com o mesmo nome** | a pasta inteira é substituída; o nome do arquivo é livre |
+| Editar o arquivo no host | quebra o bind no Docker Desktop (problema 6, seção 2.6) | funciona: a pasta continua a mesma |
+| Arquivos adicionais | um bind por arquivo | basta criar outro `.conf` na pasta |
+
+Verificação em contêineres descartáveis: sem o bind, `/etc/nginx/conf.d/`
+contém `default.conf`; com a pasta montada, contém apenas `nginx.conf`, e
+`nginx -T` não mostra nenhum `server` servindo `/usr/share/nginx/html`.
 
 ### Alterações no Docker Compose
 
@@ -86,7 +113,7 @@ original e elimina a disputa.
 nginx:
   image: nginx:1.31.9
   volumes:
-    - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    - ./nginx:/etc/nginx/conf.d:ro
   ports:
     - 80:80
   depends_on:
@@ -94,6 +121,8 @@ nginx:
 api:
   # sem "ports": a API só é alcançável pela rede interna
 ```
+
+O `:ro` monta a pasta como somente leitura: o Nginx só lê a configuração.
 
 A remoção do `ports` da API tem dois motivos: obrigar todo o tráfego a passar
 pelo Nginx e permitir várias réplicas (três contêineres não podem publicar a
@@ -279,13 +308,15 @@ inválido, listagem) funciona através do proxy.
    `nginx.conf`, o contêiner não subia (`no such file or directory`): o bind
    fica preso ao arquivo original, e editores que salvam gravando um arquivo
    novo quebram a referência. Recriar o contêiner resolve
-   (`docker compose up -d --force-recreate nginx`); montar uma pasta em vez de
-   um arquivo evita o problema.
+   (`docker compose up -d --force-recreate nginx`). A correção definitiva foi
+   mover a configuração para a pasta `nginx/` e montar a pasta em vez do
+   arquivo (seção 2.2).
 
 ## 2.7 Pendências
 
-- **Testar com várias réplicas** (`--scale api=3`) e confirmar a distribuição
-  das requisições, por exemplo registrando `$upstream_addr` no log de acesso.
+- ~~Testar com várias réplicas~~: feito na seção 6. Com 4 réplicas, 400
+  requisições se dividiram em exatamente 100 por réplica, contadas pela métrica
+  da própria API (`sum by (instance)`).
 - **Repetir o teste de ponto de ruptura através do Nginx** e comparar com a
   capacidade medida direto na API. Por padrão, o Nginx fala HTTP/1.0 com o
   *upstream* e abre **uma conexão TCP nova por requisição**; a diretiva
