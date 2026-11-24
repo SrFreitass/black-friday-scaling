@@ -258,8 +258,9 @@ k6.
 
 ### Figuras do k6 (visão do cliente)
 
-Recortes do relatório exportado pelo k6 (`k6/black-friday-1-replica.html`).
-**O k6 exibe os horários no fuso local (UTC−4)**: o pico começa às 10:06:12.
+Recortes do painel do k6 (*web dashboard*); o relatório completo está em
+`docs/img/k6-relatorio-5-1-replica.png`. **O k6 exibe os horários no fuso local
+(UTC−4)**: o pico começa às 10:06:12.
 
 #### Figura 5.7: visão geral
 
@@ -345,7 +346,7 @@ http://localhost:9090/query?g0.expr=rate(nginx_http_requests_total[10m])&g0.tab=
 
 Os dados ficam na TSDB por 15 dias (retenção padrão), então as mesmas
 consultas podem ser refeitas na UI até 2026-12-09. As figuras do k6 são
-recortes de uma captura de página inteira do relatório HTML exportado.
+recortes de uma captura de página inteira do painel do k6.
 
 ## 5.7 Efeitos colaterais
 

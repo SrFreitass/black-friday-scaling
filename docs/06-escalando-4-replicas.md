@@ -292,9 +292,9 @@ Com round-robin (B), a média fica perto de 1 s e o p99 chega a ~4,4 s: a
 distância entre média e cauda é grande. Com `least_conn` (C), média e p99
 ficam próximos (1 s e ~2 s): todos esperam parecido.
 
-Os relatórios completos do k6 estão em `k6/black-friday-4-replicas.html` (A),
-`k6/black-friday-4-replicas-rr.html` (B) e
-`k6/black-friday-4-replicas-least-conn.html` (C), com recortes em
+Os relatórios completos do k6, como imagem de página inteira, estão em
+`docs/img/k6-relatorio-6a.png` (A), `docs/img/k6-relatorio-6b.png` (B) e
+`docs/img/k6-relatorio-6c.png` (C), com recortes em
 `docs/img/fig-6{a,b,c}-k6-*.png`.
 
 ## 6.8 Limitações
