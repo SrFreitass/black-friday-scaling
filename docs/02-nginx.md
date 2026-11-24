@@ -227,10 +227,11 @@ Duas observações:
   mesmo abriu. Com `zone api 64k`, a contagem fica em memória compartilhada, e
   todos decidem com o mesmo número.
 
-Nos testes da seção 6, as conexões em andamento por réplica variaram de 71 a
-837 com round-robin e ficaram entre 444 e 456 com `least_conn`. O pior tempo de
-resposta caiu de 4,83 s para 2,50 s, mas a vazão quase não mudou (de 1.685 para
-1.728 req/s): o `least_conn` distribui a espera, não cria capacidade.
+Nos testes da seção 6, em sobrecarga, os descritores abertos por réplica variaram
+de 50 a 1.433 com round-robin e ficaram próximos entre si com `least_conn` em cada
+execução (por exemplo, 404 a 417). O pior tempo de resposta mediano caiu de 4,39 s
+para 1,45 s, enquanto a mediana subiu de 2,1 ms para 323 ms. Com folga, os dois
+métodos foram equivalentes: o `least_conn` distribui a espera, não cria capacidade.
 
 O `ip_hash` seria inadequado neste experimento: todo o tráfego do k6 sai da
 mesma máquina, ou seja, do mesmo IP, e cairia sempre na mesma réplica. O mesmo
@@ -318,9 +319,10 @@ inválido, listagem) funciona através do proxy.
   requisições se dividiram em exatamente 100 por réplica, contadas pela métrica
   da própria API (`sum by (instance)`).
 - **Repetir o teste de ponto de ruptura através do Nginx** e comparar com a
-  capacidade medida direto na API. Por padrão, o Nginx fala HTTP/1.0 com o
-  *upstream* e abre **uma conexão TCP nova por requisição**; a diretiva
-  `keepalive` no `upstream` (com `proxy_http_version 1.1`) reaproveitaria as
-  conexões. Medir o efeito antes de alterar.
+  capacidade medida direto na API.
+- ~~Conexão nova com a API por requisição~~: hipótese descartada por medição. O
+  Nginx 1.31.9 usa HTTP/1.1 com a API e reaproveita conexões: 200 requisições
+  sequenciais abriram só 12 conexões novas na API (contador `PassiveOpens` do
+  kernel, que inclui as coletas do Prometheus).
 - **Cabeçalhos `X-Forwarded-For` / `X-Real-IP`** para que a API conheça o IP
   real do cliente (hoje ela vê o IP do Nginx). Não afeta as métricas.

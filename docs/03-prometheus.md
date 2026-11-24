@@ -151,7 +151,7 @@ contêineres com **namespaces**:
 
 | Métrica | Arquivo | Isolado por namespace? | O que o Node Exporter mostra |
 |---|---|---|---|
-| CPU | `/proc/stat` | não | a máquina inteira: **12 núcleos** |
+| CPU | `/proc/stat` | não | a máquina inteira: **12 CPUs** (threads) |
 | Memória | `/proc/meminfo` | não | a máquina inteira: **11,6 GiB** |
 | Rede | `/proc/net/dev` | sim (*network namespace*) | só as interfaces do próprio contêiner (`eth0`, `lo`) |
 
@@ -166,7 +166,7 @@ WSL2** onde o Docker Desktop executa todos os contêineres.
   Node Exporter roda como *DaemonSet* (um pod por nó) com `hostNetwork`, e as
   interfaces do nó ficam visíveis.
 - **A CPU da máquina não revela a saturação da API.** A API está limitada a 0,5
-  de 12 núcleos, ou seja, cerca de **4,2 %** da máquina. Mesmo com a API no
+  de 12 CPUs, ou seja, cerca de **4,2 %** da máquina. Mesmo com a API no
   limite, o Node Exporter mostra a máquina quase ociosa. Para decidir quando
   escalar, é preciso medir também por contêiner (cAdvisor, embutido no
   Kubernetes) e na própria aplicação.
@@ -379,7 +379,7 @@ para atender (CPU, memória, disco, rede), e descreve o estado do recurso:
 | Letra | Pergunta | Métrica neste trabalho |
 |---|---|---|
 | **U**tilization (utilização) | que fração do tempo o recurso está ocupado? | CPU da réplica, `rate(process_cpu_seconds_total[1m])` (limite: 0,5 núcleo); CPU da máquina, pelo Node Exporter |
-| **S**aturation (saturação) | há trabalho esperando pelo recurso? | requisições em andamento na réplica (`process_open_fds`) e atraso do *event loop* (`nodejs_eventloop_lag_seconds`) |
+| **S**aturation (saturação) | há trabalho esperando pelo recurso? | conexões abertas na réplica (`process_open_fds`, limite superior das requisições em andamento) e atraso do *event loop* (`nodejs_eventloop_lag_seconds`) |
 | **E**rrors (erros) | o recurso está falhando? | processo encerrado por falta de memória (*OOMKilled*) |
 
 A distinção entre utilização e saturação é central: um recurso pode estar 100 %
@@ -392,12 +392,12 @@ Os dois métodos se complementam no diagnóstico: **o RED mostra que há um
 problema, e o USE indica qual recurso o causa.** No teste de Black Friday com
 uma réplica (seção 5):
 
-1. **RED, o sintoma:** a duração disparou (p95 de 11,6 ms para 3,7 s) e a taxa
-   parou de crescer em ~640 req/s, embora a demanda fosse de 2.826 req/s. Os
-   erros ficaram em 0 %: a API não falhou, ficou lenta.
+1. **RED, o sintoma:** a duração disparou (p95 de 1,55 s na navegação e 3,06 s na
+   compra) e a taxa parou de crescer em 919 req/s, embora a demanda fosse de
+   2.826 req/s. Os erros ficaram em 0 %: a API não falhou, ficou lenta.
 2. **USE, a causa:** a CPU da réplica ficou cravada em 0,5 núcleo (utilização
-   no limite), com 1.431 requisições em andamento e o *event loop* atrasado
-   (saturação). A CPU da máquina ficou em 22 %: o recurso esgotado era o limite
+   no limite), com 1.431 descritores abertos e o *event loop* atrasado
+   (saturação). A CPU da máquina ficou em 19 %: o recurso esgotado era o limite
    da réplica, e não a máquina.
 
 O diagnóstico aponta a ação: há espaço na máquina para mais réplicas, o que foi

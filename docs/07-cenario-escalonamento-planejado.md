@@ -63,49 +63,50 @@ O Nginx e o Prometheus descobrem as réplicas novas sozinhos, pelo DNS
 
 Antes do dia real, a loja simula o evento com o teste de carga (seções 5 e 6).
 
-| | Planejado | Medido com 4 réplicas |
+| | Planejado | Medido com 4 réplicas (seção 6.3) |
 |---|---|---|
-| Capacidade do sistema | 3.768 req/s | **1.685–2.173 req/s** |
-| Capacidade por réplica | 942 req/s | **421–543 req/s** |
+| Vazão no pico | 2.826 req/s | 2.494 (round-robin) e 2.648 req/s (`least_conn`) |
+| Capacidade por réplica | 942 req/s | **620 a 696 req/s** |
 | Utilização no pico | 75 % | acima de 100 % |
-| Requisições dentro do SLO | ~100 % | **2,6–71,5 %**, conforme o balanceamento |
-| Visitantes descartados | 0 | **122–212 mil** |
+| Requisições dentro do SLO | ~100 % | 75 % (round-robin) e 83 % (`least_conn`) |
+| Visitantes descartados | 0 | 61 mil e 32 mil |
 
-Escalar **ajudou muito**: comparado com uma réplica, o sistema atendeu de 2,2 a
-2,8 vezes mais requisições, e os descartes caíram de 410 mil para 122–212 mil.
-Mas **o planejamento não bastou**: a capacidade real ficou em 45–58 % da
-estimada.
+Escalar **ajudou muito**: comparado com uma réplica, o sistema atendeu cerca de 2,4
+a 2,5 vezes mais requisições, e os descartes caíram 83 % a 91 %. Mas o
+**planejamento não bastou** para cumprir o SLO: cada réplica rendeu 66 % a 74 % do
+estimado.
 
 ## 7.4 Por que a estimativa errou
 
-A capacidade foi medida em condições diferentes das reais:
+Uma réplica sozinha sustentou 919 req/s, **98 % dos 942 estimados** (seção 5). A
+estimativa de uma réplica estava certa; o que falhou foi supor que **quatro réplicas
+renderiam quatro vezes mais**.
 
-| Na medição (breakpoint) | Na Black Friday simulada |
+| Na estimativa | Na Black Friday simulada com 4 réplicas |
 |---|---|
-| 1 réplica sozinha na máquina | 4 réplicas, PostgreSQL, Nginx e k6 disputando os mesmos 12 núcleos |
-| acesso direto à API | todo o tráfego passa pelo Nginx |
-| poucas dezenas de conexões | ~1.400 conexões simultâneas |
+| crescimento linear | 4 réplicas, PostgreSQL, Nginx e k6 nas mesmas 12 CPUs (6 núcleos físicos) |
 | 10 conexões com o banco | até 40 conexões com o banco |
+| carga igual entre réplicas | com round-robin, réplicas saturadas ao lado de réplicas com folga |
 
-Mesmo uma única réplica, atrás do Nginx e sob a carga da Black Friday,
-sustentou ~640 req/s (seção 5), e não os 942 estimados. Com 4 réplicas, cada
-uma sustentou menos ainda: o crescimento não é linear quando há recursos
-compartilhados.
+Esses fatores são candidatos; o peso de cada um não foi isolado.
 
-**Lição de planejamento:** a capacidade precisa ser medida **na configuração
-real**, com o mesmo caminho de rede, o mesmo número de réplicas e a mesma
-concorrência. Um *breakpoint* de uma réplica isolada dá um limite superior
-otimista.
+**Lição de planejamento:** a capacidade precisa ser medida com o **número de
+réplicas** que será usado. Multiplicar a capacidade de uma réplica isolada dá um
+limite superior otimista.
 
 ## 7.5 Quantas réplicas seriam necessárias
 
-Refazendo a conta com a capacidade **medida** por réplica (~420–540 req/s com 4
-réplicas):
+Refazendo a conta com a capacidade **medida** por réplica (620 req/s, o menor valor
+com 4 réplicas):
 
 ```
-réplicas mínimas  = 2.826 ÷ 420 ≈ 7
-com utilização de 75 % = 2.826 ÷ (420 × 0,75) ≈ 9
+réplicas mínimas       = 2.826 ÷ 620          = 4,6 → 5
+com utilização de 75 % = 2.826 ÷ (620 × 0,75) = 6,1 → 7
 ```
+
+Os 75 % são a mesma margem escolhida no planejamento. Há um indício a favor: a 1,5×,
+com as réplicas em cerca de 52 % do limite de CPU, 100 % das requisições ficaram no
+SLO (seção 6.4).
 
 Estes valores são **estimativas não testadas**, e esbarram em dois limites:
 
@@ -113,7 +114,7 @@ Estes valores são **estimativas não testadas**, e esbarram em dois limites:
    máquina e o mesmo banco tendem a render menos cada uma.
 2. **O banco tem um teto de conexões.** Cada réplica abre até 10 conexões (pool
    padrão do `pg`), e o PostgreSQL aceita 100 por padrão (`max_connections`).
-   Com 9 réplicas, seriam até 90 conexões, perto do limite. Daí em diante,
+   Com 7 réplicas, seriam até 70 conexões, e com 10, o limite. Daí em diante,
    escalar a API exigiria mudar o banco (pool compartilhado, réplicas de
    leitura), o que fica fora do escopo deste trabalho.
 
@@ -146,8 +147,8 @@ O que limita a intervenção manual é o **tempo humano**. Somam-se:
 2. **decidir:** interpretar os gráficos e escolher quantas réplicas subir;
 3. **agir:** executar o comando.
 
-No teste, o SLO caiu de 100 % para 0 % em cerca de 45 segundos depois da
-abertura da promoção (Figura 5.4), e o pico inteiro durou 3 minutos. Uma reação
+No teste com uma réplica, a fração no SLO chegou a 0 % cerca de 1 minuto depois da
+abertura da promoção (Figura 5.3), e o pico inteiro durou 3 minutos. Uma reação
 humana de alguns minutos chegaria quando o pico já tivesse passado.
 
 O primeiro passo para encurtar esse tempo é automatizar a **detecção**: o
