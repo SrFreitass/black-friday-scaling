@@ -160,6 +160,49 @@ Depois dos testes com 4 réplicas (seção 6), o `upstream` passou a usar
 `least_conn`: com round-robin, algumas réplicas saturavam enquanto outras
 ficavam livres.
 
+### Como o `least_conn` decide
+
+O round-robin reveza as réplicas numa ordem fixa, sem olhar a situação de
+nenhuma delas:
+
+```
+req 1 → A    req 2 → B    req 3 → C    req 4 → D    req 5 → A ...
+```
+
+O `least_conn`, antes de cada requisição, consulta quantas conexões estão em
+andamento com cada réplica e escolhe a de menor número (em caso de empate,
+reveza entre as empatadas):
+
+```
+conexões abertas agora:   A = 12   B = 3   C = 40   D = 5
+próxima requisição → B
+```
+
+O número de conexões abertas funciona como medida de carga porque uma conexão
+só é liberada quando a réplica termina de responder. Uma requisição que fica
+esperando uma consulta ao banco, uma vez livre no pool de conexões ou o próprio
+*event loop* mantém a conexão aberta durante toda a espera. Uma réplica rápida
+fecha suas conexões logo e mantém o número baixo; uma réplica atrasada acumula
+conexões. O round-robin não enxerga essa diferença e continua entregando a
+mesma fatia à réplica atrasada. O `least_conn` cria um ciclo de correção:
+quanto mais uma réplica atrasa, mais conexões acumula e menos requisições novas
+recebe.
+
+Duas observações:
+
+- **Conexões não são CPU.** O critério conta requisições em andamento, não o
+  esforço de cada uma. Numa API em que cada requisição ocupa uma conexão até
+  ser respondida, as duas medidas andam juntas.
+- **A contagem precisa ser compartilhada.** O Nginx roda vários processos
+  *worker*; sem a diretiva `zone`, cada um contaria apenas as conexões que ele
+  mesmo abriu. Com `zone api 64k`, a contagem fica em memória compartilhada, e
+  todos decidem com o mesmo número.
+
+Nos testes da seção 6, as conexões em andamento por réplica variaram de 71 a
+837 com round-robin e ficaram entre 444 e 456 com `least_conn`. O pior tempo de
+resposta caiu de 4,83 s para 2,50 s, mas a vazão quase não mudou (de 1.685 para
+1.728 req/s): o `least_conn` distribui a espera, não cria capacidade.
+
 O `ip_hash` seria inadequado neste experimento: todo o tráfego do k6 sai da
 mesma máquina, ou seja, do mesmo IP, e cairia sempre na mesma réplica. O mesmo
 acontece em produção com milhares de clientes atrás de um mesmo NAT de
