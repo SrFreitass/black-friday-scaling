@@ -1,0 +1,61 @@
+@baseUrl = http://localhost
+
+### List products
+GET {{baseUrl}}/products
+
+### List orders
+GET {{baseUrl}}/orders
+
+### Create order
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "product_id": 1,
+  "quantity": 2
+}
+
+### Create order - large quantity of a cheap product
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "product_id": 49,
+  "quantity": 100
+}
+
+### Create order - product that does not exist
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "product_id": 99999,
+  "quantity": 1
+}
+
+### Create order - invalid product_id (not a number)
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "product_id": "abc",
+  "quantity": 1
+}
+
+### Create order - negative quantity
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "product_id": 1,
+  "quantity": -5
+}
+
+### Create order - missing body
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{}
+
+### Unknown route
+GET {{baseUrl}}/not-found
