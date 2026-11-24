@@ -1,0 +1,43 @@
+services:
+  nginx:
+    image: nginx:1.31.9
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 80:80
+    depends_on:
+      - api
+  nginx-prometheus-exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.3
+    command: ["--nginx.scrape-uri", "http://nginx:8080/stub_status"]
+    depends_on:
+      - nginx
+  node-exporter:
+    image: prom/node-exporter:v1.13.1
+  api:
+    build: ./server
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
+      HOST: 0.0.0.0
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    depends_on:
+      - db
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./server/src/db/migrations:/docker-entrypoint-initdb.d
+volumes:
+  prometheus-data:
