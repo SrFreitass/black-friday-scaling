@@ -1,18 +1,14 @@
 # 6. Escalando para 4 réplicas: round-robin e least_conn
 
 > Rascunho de documentação do processo, para virar seção do artigo.
-> Testes executados em 2026-11-24. Horários em UTC (os gráficos do Prometheus
-> usam UTC; os do k6, o horário local, UTC−4).
+> Valores: mediana de três execuções [mínimo–máximo]. Ambiente e procedimento na
+> seção 8.
 
 ## 6.1 Objetivo
 
-Repetir o teste de Black Friday da seção 5, o mesmo arquivo e a mesma carga
-(pico de 2.826 req/s, 3× a capacidade estimada de uma réplica), com a API
-escalada para **4 réplicas**, e observar:
-
-1. quanto a capacidade do sistema aumenta;
-2. como o Nginx distribui a carga entre as réplicas;
-3. se o método de balanceamento faz diferença.
+Repetir o teste da seção 5 com **4 réplicas** e observar quanto a capacidade
+aumenta, como o Nginx distribui a carga e se o método de balanceamento faz
+diferença, em **sobrecarga** (pico de 2.826 req/s) e com **folga** (1.413 req/s).
 
 ## 6.2 Escalando
 
@@ -20,295 +16,190 @@ escalada para **4 réplicas**, e observar:
 docker compose up -d --scale api=4
 ```
 
-Nenhuma configuração foi alterada para as réplicas novas serem encontradas:
-
 | Componente | Mecanismo | Resultado |
 |---|---|---|
-| DNS do Docker | o nome `api` passa a responder com 4 registros A | `172.20.0.4`, `172.20.0.8`, `172.20.0.9`, `172.20.0.10` |
-| Nginx | `server api:8080 resolve` + `resolver ... valid=10s` | as 4 réplicas entraram no `upstream` sem *reload* |
-| Prometheus | `dns_sd_configs` com `refresh_interval: 10s` | 4 alvos no job `api`, todos UP |
+| DNS do Docker | o nome `api` responde com 4 registros A | um IP por réplica |
+| Nginx | `server api:8080 resolve` + `resolver ... valid=10s` | réplicas entram no `upstream` sem *reload* |
+| Prometheus | `dns_sd_configs` com `refresh_interval: 10s` | 4 alvos no job `api` |
 
-Verificação do balanceamento antes do teste: 400 requisições `GET /products`
-pelo Nginx, contadas por réplica com
-`sum by (instance) (http_request_duration_seconds_count{route="/products"})`:
-**exatamente 100 em cada réplica** (round-robin).
+Com round-robin, 400 requisições de teste se dividiram em exatamente 100 por
+réplica.
 
-## 6.3 Os testes
+A única diferença entre os cenários de round-robin e `least_conn` é a linha
+`least_conn;` no `upstream`.
 
-Foram feitos três testes com 4 réplicas, mudando uma coisa de cada vez:
+## 6.3 Resultados em sobrecarga (pico de 2.826 req/s)
 
-| Teste | Balanceamento | Réplicas | Janela (UTC) | Prefixo das figuras |
-|---|---|---|---|---|
-| A | round-robin | 1 réplica que já tinha passado pelo teste da seção 5 + 3 novas | 14:25:16–14:30:37 | `6a` |
-| B | round-robin | 4 réplicas recriadas do zero | 14:35:44–14:41:04 | `6b` |
-| C | `least_conn` | 4 réplicas recriadas do zero | 14:42:01–14:47:22 | `6c` |
+| | 1 réplica (seção 5) | 4, round-robin | 4, `least_conn` |
+|---|---|---|---|
+| Requisições atendidas | 214.743 | 512.960 [509.911–534.316] | 541.939 [520.655–561.143] |
+| Visitantes descartados | 358.987 | 60.769 [39.414–63.818] | 31.790 [12.586–53.075] |
+| Vazão no platô (req/s) | 919 | 2.494 [2.480–2.637] | 2.648 [2.560–2.783] |
+| Dentro do SLO (platô) | 0 % | 75,0 % [57,8–75,0] | 83,3 % [74,4–92,9] |
+| Mediana da duração | 1,39 s | **2,1 ms** [1,7–16,9] | 323 ms [237–448] |
+| p95 navegação | 1,55 s | 2,03 s [1,03–2,03] | **0,50 s** [0,39–0,58] |
+| p95 compra | 3,06 s | 4,00 s [2,04–4,01] | **0,99 s** [0,72–1,10] |
+| Duração máxima | 3,59 s | 4,39 s [2,69–4,43] | **1,45 s** [1,11–1,54] |
+| CPU da máquina (pico) | 19 % | 50 % [49–51] | 54 % [51–56] |
 
-O teste B existe para separar duas explicações possíveis do resultado do teste
-A (seção 6.5). O teste C muda **apenas** o método de balanceamento em relação
-ao B.
+Erros HTTP: 0 em todas as execuções.
 
-Mudança no `nginx.conf` para o teste C, uma linha no `upstream`:
+### Por réplica
 
-```nginx
-upstream load_balancer {
-    least_conn;
-    zone api 64k;
-    resolver 127.0.0.11 valid=10s ipv6=off;
-    server api:8080 resolve;
-}
-```
+Cada linha é uma execução. A ordem das réplicas não é a mesma entre as colunas:
 
-## 6.4 Resultados
+| Execução | req/s por réplica | Dentro do SLO por réplica (%) | Descritores abertos (média) |
+|---|---|---|---|
+| RR 1 | 655, 660, 660, 663 | 0, 100, 100, 31 | 808, 539, 50, 50 |
+| RR 2 | 623, 624, 625, 623 | 100, 100, 100, 0 | 105, 1.430, 78, 82 |
+| RR 3 | 619, 621, 620, 619 | 100, 0, 100, 100 | 69, 84, 1.433, 85 |
+| LC 1 | 659, 723, 745, 660 | 91, 94, 95, 91 | 241, 241, 263, 265 |
+| LC 2 | 634, 665, 747, 620 | 82, 82, 87, 81 | 329, 326, 331, 335 |
+| LC 3 | 603, 605, 618, 738 | 66, 68, 71, 90 | 404, 404, 410, 417 |
 
-Valores do k6 para o teste inteiro; valores do Prometheus como média no platô
-do pico (2 min 15 s, a partir de 2 minutos do início).
+`process_open_fds` conta conexões abertas, incluindo ociosas mantidas por
+*keep-alive* (o Nginx reaproveita conexões com a API, seção 2.7). É um **limite
+superior** das requisições em andamento: na execução LC 3, a soma passa dos 1.414
+VUs do k6.
 
-| | 1 réplica (seção 5) | A: RR, 1 antiga | B: RR, novas | C: `least_conn`, novas |
-|---|---|---|---|---|
-| Requisições atendidas | 163.289 | **451.059** | 362.043 | 370.858 |
-| Visitantes descartados | 410.441 | **122.671** | 211.686 | 202.872 |
-| Vazão no platô (Nginx) | 642 req/s | **2.173 req/s** | 1.685 req/s | 1.728 req/s |
-| Mediana da duração (k6) | 1,9 s | **7,5 ms** | 55 ms | 709 ms |
-| p95 navegação (k6) | 2,36 s | 2,26 s | 1,88 s | **0,97 s** |
-| p95 compra (k6) | 4,51 s | 4,48 s | 3,68 s | **1,81 s** |
-| Duração máxima (k6) | 5,26 s | 5,49 s | 4,83 s | **2,50 s** |
-| Requisições dentro do SLO (platô) | 1,5 % | **71,5 %** | 50,1 % | 2,6 % |
-| Réplicas com CPU no limite | 1 de 1 | 1 de 4 | 2 de 4 | **4 de 4** |
-| CPU da máquina (pico) | 22 % | 60 % | 56 % | 60 % |
+## 6.4 Resultados com folga (pico de 1.413 req/s)
 
-Erros HTTP: 0 % em todos os testes.
+| | 4, round-robin | 4, `least_conn` |
+|---|---|---|
+| Requisições atendidas | 305.180 [305.002–305.197] | 305.173 [305.004–305.213] |
+| Visitantes descartados | 79 [62–256] | 85 [46–255] |
+| Vazão no platô (req/s) | 1.413 | 1.413 |
+| Dentro do SLO (platô) | 100 % | 100 % |
+| Mediana da duração | 1,3 ms | 1,3 ms |
+| p95 navegação | 1,8 ms [1,6–1,8] | 1,6 ms [1,6–1,6] |
+| p95 compra | 13,8 ms [12,5–17,8] | 14,9 ms [11,2–18,7] |
+| Duração máxima | 254 ms [167–660] | 278 ms [206–316] |
+| CPU por réplica | 0,25 a 0,28 | 0,25 a 0,27 |
+| CPU da máquina (pico) | 31 % | 30 % |
 
-### Por réplica, no platô do pico
-
-**Teste A (round-robin, uma réplica antiga):**
-
-| Réplica | req/s | CPU | p50 `/products` | p95 `/products` | Dentro do SLO | Conexões |
-|---|---|---|---|---|---|---|
-| `.4` (antiga) | 535 | **0,500** | **1,8 s** | **3,8 s** | **0 %** | **1.416** |
-| `.8` | 541 | 0,491 | 3,4 ms | 27 ms | 100 % | 135 |
-| `.9` | 542 | 0,479 | 2,9 ms | 17 ms | 100 % | 94 |
-| `.10` | 532 | 0,474 | 2,9 ms | 16 ms | 100 % | 89 |
-
-**Teste B (round-robin, réplicas novas):**
-
-| Réplica | req/s | CPU | p95 `/products` | Dentro do SLO | Conexões |
-|---|---|---|---|---|---|
-| `.4` | 419 | **0,500** | **2,4 s** | **0 %** | **837** |
-| `.10` | 414 | **0,499** | **2,4 s** | **1,6 %** | **795** |
-| `.8` | 419 | 0,477 | 55 ms | 99,8 % | 71 |
-| `.9` | 421 | 0,481 | 127 ms | 98,1 % | 79 |
-
-**Teste C (`least_conn`, réplicas novas):**
-
-| Réplica | req/s | CPU | p95 `/products` | Dentro do SLO | Conexões |
-|---|---|---|---|---|---|
-| `.4` | 392 | 0,500 | 1,08 s | 0,3 % | 456 |
-| `.8` | 384 | 0,500 | 1,24 s | 0,5 % | 452 |
-| `.9` | 456 | 0,500 | 0,98 s | 3,7 % | 451 |
-| `.10` | 472 | 0,497 | 0,97 s | 5,3 % | 444 |
-
-"Conexões" é `process_open_fds`: cada conexão aberta pelo Nginx com a réplica
-ocupa um descritor, então o valor acompanha o número de requisições em
-andamento naquela réplica.
+Os poucos descartes (menos de 0,1 % das requisições) fizeram o limite
+`dropped_iterations == 0` do k6 reprovar, embora o SLO tenha sido cumprido.
 
 ## 6.5 Análise
 
-### Escalar aumentou a capacidade
+### Escalar aumentou a capacidade, sem ser linear
 
-Com 4 réplicas, o sistema atendeu de 2,2 a 2,8 vezes mais requisições, e a
-vazão no pico foi de 2,6 a 3,4 vezes a de uma réplica. Os visitantes
-descartados caíram de 410 mil para 123–212 mil. Mesmo assim, **nenhum teste
-cumpriu o SLO**: a demanda do pico (2.826 req/s) continuou acima da capacidade
-de 4 réplicas nesta máquina (1.700–2.200 req/s).
+Com 4 réplicas, a vazão no platô foi 2,7 vezes (round-robin) e 2,9 vezes
+(`least_conn`) a de uma réplica, e os descartes caíram 83 % e 91 %. Isso é 68 % e
+72 % do ideal de 4 vezes. Como a demanda era de 2.826 req/s, a melhor execução
+(2.783 req/s) ficou a 2 % dela, e a capacidade máxima pode ser maior que a observada.
 
-### O crescimento não foi linear
-
-Uma réplica sozinha sustentou ~640 req/s; com 4, cada uma sustentou ~380–540
-req/s. Hipóteses para a perda de eficiência, não isoladas nestes testes:
-
-- **CPU da máquina compartilhada.** A CPU total subiu de 22 % para ~60 %: as
-  réplicas, o PostgreSQL, o Nginx e o próprio k6, que precisa gerar mais de
-  2.000 req/s, disputam os mesmos 12 núcleos.
-- **Banco único.** O PostgreSQL passou a receber até 40 conexões (4 réplicas ×
-  10 do pool) em vez de 10.
-- **Variação entre execuções.** Os testes A e B têm a mesma configuração de
-  balanceamento, mas vazões diferentes (2.173 e 1.685 req/s).
-
-É o comportamento previsto para recursos compartilhados: escalar a camada da
-aplicação não escala o que ela usa por baixo.
+No pico, as 4 réplicas usaram 2,0 CPUs (o limite de 4 × 0,5), o PostgreSQL 0,9 a
+1,0, o Nginx 0,8 e o k6 1,6 a 1,9. O limite das réplicas e a disputa pelas CPUs
+compartilhadas são candidatos para a perda, que não foi isolada.
 
 ### Round-robin: réplicas iguais, destinos diferentes
 
-No teste A, o round-robin mandou **a mesma taxa** para as 4 réplicas (~535
-req/s cada). Três ficaram logo abaixo do limite de CPU e responderam em
-milissegundos; uma, a `.4`, ficou cravada em 0,500 núcleo e acumulou 1.416
-requisições em andamento. Pela lei de Little, 535 req/s × ~2,6 s ≈ 1.400. Ela
-continuou drenando a fila por cerca de 1 minuto **depois** do fim do teste
-(Figura 6a.6).
+O round-robin entregou **a mesma taxa** a todas as réplicas, e mesmo assim, **nas
+três execuções**, pelo menos uma ficou com 0 % das requisições no SLO, enquanto
+outras ficaram em 100 %. Não foi sempre a mesma réplica.
 
-A primeira explicação seria a `.4` ser diferente: era a única que já tinha
-rodado o teste da seção 5. O **teste B** descartou essa hipótese: com as 4
-réplicas recriadas do zero, o mesmo fenômeno aconteceu, desta vez com **duas**
-réplicas (`.4` e `.10`) saturadas e duas saudáveis. Além disso, no teste A, a
-`.8` também formou fila no início do pico (~650 conexões) e conseguiu se
-recuperar (Figura 6a.6): as réplicas partiram da mesma situação, e algumas
-escaparam e outras não.
+A teoria de filas descreve esse comportamento: perto de ρ = 1 (taxa de chegada
+igual à de serviço), pequenas diferenças decidem se a fila se esvazia ou cresce. O
+round-robin não considera a carga e mantém a fatia da réplica atrasada. O resultado
+é **bimodal**: mediana de 2 ms, com p95 de 2 s na navegação e 4 s na compra.
 
-A explicação está na **teoria de filas**. Com utilização ρ = taxa de chegada ÷
-taxa de serviço:
+### `least_conn`: espera dividida
 
-- se ρ < 1, a réplica atende mais rápido do que as requisições chegam, e a
-  fila se esvazia;
-- se ρ > 1, a fila cresce sem limite enquanto a carga durar.
+Com `least_conn`, as 4 réplicas tiveram números de conexões quase iguais e nenhuma
+ficou com 0 % no SLO (de 66 % a 95 %). A espera foi dividida: a mediana subiu para centenas de milissegundos,
+e a cauda encolheu.
 
-Perto de ρ = 1, diferenças pequenas (uma rajada a mais no início do pico, uma
-pausa da coleta de lixo, a disputa por CPU com os outros processos) decidem de
-que lado cada réplica fica. Como o round-robin **não considera a carga** de
-cada réplica, ele continua mandando a mesma fatia para a réplica atolada, e ela
-nunca sai do buraco. O resultado é uma experiência **bimodal**: no teste B,
-metade das requisições dentro do SLO e metade com segundos de espera.
+| Comparação em sobrecarga | Diferença maior que a variação entre execuções? |
+|---|---|
+| p95, duração máxima: menores com `least_conn` | sim, as faixas não se sobrepõem |
+| mediana: menor com round-robin | sim, as faixas não se sobrepõem |
+| vazão e descartes: melhores com `least_conn` | não, as faixas se sobrepõem |
+| dentro do SLO: maior com `least_conn` | quase: as faixas se tocam (74,4–92,9 e 57,8–75,0) |
 
-### least_conn: a fila dividida por igual
+O que os dados sustentam é que o `least_conn` **reduz a cauda à custa da mediana**.
+Um ganho de vazão ou de SLO é sugerido, mas não demonstrado com três execuções.
 
-O `least_conn` envia cada requisição para a réplica com **menos conexões
-ativas**. No teste C, as conexões em andamento ficaram praticamente iguais nas
-4 réplicas (444–456, Figura 6c.6), contra 71–837 no teste B (Figura 6b.6), e
-as 4 réplicas trabalharam no limite de CPU.
+### Com folga, o método não fez diferença
 
-O efeito sobre a latência foi o oposto do round-robin:
-
-| | B: round-robin | C: `least_conn` |
-|---|---|---|
-| Mediana | 55 ms | 709 ms |
-| p95 navegação | 1,88 s | 0,97 s |
-| Máximo | 4,83 s | 2,50 s |
-| Dentro do SLO | 50 % | 2,6 % |
-| Vazão | 1.685 req/s | 1.728 req/s |
-
-O `least_conn` **eliminou a cauda**: o pior caso caiu pela metade, e a latência
-ficou uniforme entre as réplicas. Em compensação, **todos** passaram a esperar
-cerca de 1 segundo, e quase ninguém ficou dentro do SLO. A vazão praticamente
-não mudou.
+A 1,5×, com cada réplica a cerca de metade do limite de CPU, os dois métodos
+tiveram 100 % no SLO e latências equivalentes. A escolha do balanceamento só
+apareceu perto da saturação.
 
 ### O balanceador não cria capacidade
 
-A conclusão comum aos três testes: com a demanda (2.826 req/s) acima da
-capacidade (~1.700 req/s), o excedente **precisa** esperar em alguma fila. O
-método de balanceamento só decide **quem espera**:
+Com a demanda acima da capacidade, o excedente espera em alguma fila, e o método
+decide **quem** espera. Para cumprir o SLO é preciso capacidade (mais réplicas,
+antes ou durante o pico) ou **controle de admissão**, recusando o excedente (HTTP
+429 ou 503).
 
-- **round-robin:** parte das réplicas fica livre e parte acumula toda a fila.
-  Muitos clientes são atendidos rápido; os que caem na réplica saturada esperam
-  segundos;
-- **`least_conn`:** a fila é dividida igualmente. Ninguém espera muito, mas
-  todos esperam.
+## 6.6 Figuras
 
-Para cumprir o SLO, é preciso **capacidade**: mais réplicas antes do pico
-(escalonamento antecipado), mais réplicas durante o pico (escalonamento
-reativo, como o KEDA), ou **controle de admissão**: recusar rapidamente o
-excedente (HTTP 429 ou 503) para proteger quem já está sendo atendido. O
-`least_conn` continua sendo a escolha mais adequada para requisições de duração
-variável, como nesta loja, e foi mantido na configuração.
+Execuções medianas em requisições atendidas: round-robin 2 (19:51:01–19:56:23 UTC)
+e `least_conn` 2 (19:57:30–20:02:52 UTC).
 
-## 6.6 As camadas continuam concordando
+### Figura 6.1: descritores abertos por réplica
 
-Teste A, contagem no período do teste:
+Round-robin:
 
-| Fonte | Requisições |
-|---|---|
-| k6 (`http_reqs`) | 451.059 |
-| Nginx (diferença do contador `nginx_http_requests_total`) | 451.083 |
-| API (soma de `http_request_duration_seconds_count` das 4 réplicas) | 451.059 |
+![descritores, round-robin](img/fig-r2-4rr-conexoes-por-replica.png)
 
-A diferença de 24 no Nginx são as coletas do próprio exporter. A soma das 4
-réplicas bate exatamente com o k6.
+`least_conn`:
 
-## 6.7 Figuras
+![descritores, least_conn](img/fig-r2-4lc-conexoes-por-replica.png)
 
-Todas as figuras do Prometheus estão em `docs/img/`, com 8 consultas por teste.
-Para comparar os testes, use o mesmo número de figura com prefixos diferentes
-(`6a`, `6b`, `6c`).
+### Figura 6.2: requisições dentro do SLO por réplica
 
-| Nº | Arquivo (sufixo) | Consulta |
-|---|---|---|
-| 1 | `rate-1m-vs-10m` | `label_replace(rate(nginx_http_requests_total[1m]), "janela", "1m", "", "") or label_replace(rate(nginx_http_requests_total[10m]), "janela", "10m", "", "")` |
-| 2 | `reqs-por-replica` | `sum by (instance) (rate(http_request_duration_seconds_count{job="api"}[1m]))` |
-| 3 | `cpu-por-replica` | `rate(process_cpu_seconds_total{job="api"}[1m])` |
-| 4 | `p95-por-replica` | `histogram_quantile(0.95, sum by (le, instance) (rate(http_request_duration_seconds_bucket{job="api", route="/products"}[1m])))` |
-| 5 | `slo-por-replica` | `100 * sum by (instance) (rate(http_request_duration_seconds_bucket{job="api", le="0.5"}[1m])) / sum by (instance) (rate(http_request_duration_seconds_count{job="api"}[1m]))` |
-| 6 | `conexoes-por-replica` | `process_open_fds{job="api"}` |
-| 7 | `slo-total` | `100 * sum(rate(http_request_duration_seconds_bucket{job="api", le="0.5"}[1m])) / sum(rate(http_request_duration_seconds_count{job="api"}[1m]))` |
-| 8 | `cpu-maquina` | `100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[1m])))` |
+Round-robin:
 
-### As figuras principais
+![SLO, round-robin](img/fig-r2-4rr-slo-por-replica.png)
 
-#### Figura 6a.6: conexões por réplica, round-robin com uma réplica antiga
+`least_conn`:
 
-![conexões por réplica, teste A](img/fig-6a-conexoes-por-replica.png)
+![SLO, least_conn](img/fig-r2-4lc-slo-por-replica.png)
 
-A `.4` acumula ~1.430 conexões e só as drena depois do fim do teste; a `.8`
-forma fila no início do pico e se recupera.
+### Figura 6.3: requisições por segundo por réplica
 
-#### Figura 6b.6: conexões por réplica, round-robin com réplicas novas
+Round-robin:
 
-![conexões por réplica, teste B](img/fig-6b-conexoes-por-replica.png)
+![req/s, round-robin](img/fig-r2-4rr-reqs-por-replica.png)
 
-Duas réplicas saturam (~800–990 conexões), duas ficam abaixo de 120.
+`least_conn`:
 
-#### Figura 6c.6: conexões por réplica, least_conn
+![req/s, least_conn](img/fig-r2-4lc-reqs-por-replica.png)
 
-![conexões por réplica, teste C](img/fig-6c-conexoes-por-replica.png)
+### Figura 6.4: CPU por réplica
 
-As 4 réplicas com ~450 conexões cada: a fila dividida por igual.
+Round-robin:
 
-#### Figura 6a.4: p95 de `/products` por réplica, teste A
+![CPU, round-robin](img/fig-r2-4rr-cpu-por-replica.png)
 
-![p95 por réplica, teste A](img/fig-6a-p95-por-replica.png)
+`least_conn`:
 
-Em segundos. A `.4` chega a 3,8 s; a `.8` sobe a 2 s no início e se recupera;
-as outras ficam perto de zero.
+![CPU, least_conn](img/fig-r2-4lc-cpu-por-replica.png)
 
-#### Figura 6a.2: requisições por segundo por réplica, teste A
+### Figura 6.5: duração das requisições (k6)
 
-![req/s por réplica, teste A](img/fig-6a-reqs-por-replica.png)
+Round-robin:
 
-As 4 linhas praticamente sobrepostas: o round-robin entregou a mesma taxa a
-todas, inclusive à réplica saturada.
+![k6: duração, round-robin](img/fig-r2-4rr-k6-duracao.png)
 
-#### Figura 6b.7 e 6c.7: requisições dentro do SLO
+`least_conn`:
 
-![SLO total, teste B](img/fig-6b-slo-total.png)
+![k6: duração, least_conn](img/fig-r2-4lc-k6-duracao.png)
 
-![SLO total, teste C](img/fig-6c-slo-total.png)
+## 6.7 Limitações
 
-Round-robin (B) estabiliza em ~50 %; `least_conn` (C) cai para perto de zero.
+As limitações do ambiente estão na seção 8.6. Além delas:
 
-#### Figuras do k6: duração das requisições, testes B e C
-
-![k6: duração, teste B](img/fig-6b-k6-duracao.png)
-
-![k6: duração, teste C](img/fig-6c-k6-duracao.png)
-
-Com round-robin (B), a média fica perto de 1 s e o p99 chega a ~4,4 s: a
-distância entre média e cauda é grande. Com `least_conn` (C), média e p99
-ficam próximos (1 s e ~2 s): todos esperam parecido.
-
-Os relatórios completos do k6, como imagem de página inteira, estão em
-`docs/img/k6-relatorio-6a.png` (A), `docs/img/k6-relatorio-6b.png` (B) e
-`docs/img/k6-relatorio-6c.png` (C), com recortes em
-`docs/img/fig-6{a,b,c}-k6-*.png`.
-
-## 6.8 Limitações
-
-- **Gerador de carga na mesma máquina.** O k6 roda no mesmo computador e
-  disputa CPU com o sistema testado; com 4 réplicas, a CPU total chegou a 60 %.
-- **Caminho de rede do gerador.** O k6 acessa o sistema pela porta publicada
-  do Docker Desktop (`localhost:80`), que passa por um encaminhamento de portas
-  do próprio Docker antes de chegar ao Nginx. Esse salto não aparece em nenhuma
-  métrica coletada. Rodar o k6 num contêiner na rede do Compose eliminaria
-  esse salto.
-- **Uma execução por configuração.** A diferença de vazão entre os testes A e B
-  (mesma configuração de balanceamento) mostra que há variação entre execuções;
-  repetir cada teste algumas vezes daria margens de erro.
-- **Artefato de medição.** No teste A, o k6 reportou duração mínima negativa
-  (−606 µs), um erro de medição do relógio do gerador sob carga; não afeta os
-  percentis.
+- A mistura de tráfego atendida variou com o método: a execução round-robin 2 teve
+  88/12 e a `least_conn` 2 teve 84/16, porque o limite de VUs de compra se esgota
+  antes.
+- A fração dentro do SLO é medida na API e não inclui o tempo no Nginx nem os
+  visitantes descartados.
+- **Rodada anterior:** uma execução por método, com o k6 fora dos contêineres,
+  indicou 2,6 % no SLO para `least_conn` e 50 % a 72 % para round-robin, o contrário
+  desta rodada. Lá a demanda estava bem acima da capacidade observada (1.685 a 2.173
+  req/s), e dividir a espera por igual deixou quase todos fora do limite de 0,5 s.
+  Nesta rodada, o excesso era menor. Isso sugere, sem provar, que o efeito do
+  `least_conn` no SLO depende do tamanho da sobrecarga.
