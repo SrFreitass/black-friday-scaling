@@ -39,5 +39,18 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./server/src/db/migrations:/docker-entrypoint-initdb.d
+  k6:
+    image: grafana/k6:2.4.0
+    user: "1000:1000"
+    working_dir: /k6
+    volumes:
+      - ./k6:/k6
+    environment:
+      BASE_URL: http://nginx
+      K6_WEB_DASHBOARD_HOST: 0.0.0.0
+    ports:
+      - 5665:5665
+    depends_on:
+      - nginx
 volumes:
   prometheus-data:
