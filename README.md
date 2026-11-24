@@ -69,26 +69,44 @@ passo, autoescalonamento com KEDA.
 
 ```mermaid
 flowchart LR
-    k6["k6<br/>(gerador de carga)"] -->|HTTP :80| nginx
+    k6["k6<br/>gerador de carga"]
+    user["Navegador<br/>UI nativa"]
 
     subgraph compose["Docker Compose"]
-        nginx["Nginx<br/>proxy reverso + least_conn"]
-        nginx -->|"DNS: api"| api1["API #1"]
-        nginx --> api2["API #2"]
-        nginx --> apiN["API #N"]
-        api1 & api2 & apiN --> db[("PostgreSQL")]
+        direction LR
 
-        exporter["nginx-prometheus-exporter<br/>:9113"] -->|lê :8080/stub_status| nginx
-        node["Node Exporter<br/>:9100"]
+        subgraph loja["Tráfego da loja"]
+            direction LR
+            nginx["Nginx :80<br/>proxy reverso<br/>least_conn"]
+            subgraph apis["API · N réplicas"]
+                direction TB
+                api1["API #1"]
+                api2["API #2"]
+                apiN["API #N"]
+            end
+            db[("PostgreSQL")]
+            nginx -->|"DNS: api"| apis
+            apis --> db
+        end
 
-        prom["Prometheus<br/>:9090 + TSDB"]
-        prom -.->|pull 15 s| exporter
-        prom -.->|pull 15 s| node
-        prom -.->|"pull 15 s<br/>dns_sd_configs"| api1 & api2 & apiN
+        subgraph obs["Observabilidade"]
+            direction TB
+            prom["Prometheus :9090<br/>TSDB"]
+            exporter["nginx-prometheus-exporter<br/>:9113"]
+            node["Node Exporter<br/>:9100"]
+        end
+
+        prom -. "pull 15 s" .-> exporter
+        prom -. "pull 15 s" .-> node
+        prom -. "pull 15 s<br/>dns_sd_configs" .-> apis
+        exporter -. "lê :8080/stub_status" .-> nginx
     end
 
-    user["Navegador<br/>(UI nativa)"] -->|:9090| prom
+    k6 -->|"HTTP :80"| nginx
+    user -->|":9090"| prom
 ```
+
+Linhas contínuas são o tráfego da loja; linhas tracejadas são a coleta de métricas.
 
 Três camadas de observação, cada uma respondendo uma pergunta:
 
