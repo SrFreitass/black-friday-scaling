@@ -118,38 +118,42 @@ Três camadas de observação, cada uma respondendo uma pergunta:
 
 ## 📊 Principais resultados
 
-Mesma Black Friday simulada (pico de **2.826 req/s**, 3× a capacidade estimada de uma
-réplica), mudando o número de réplicas e o balanceamento:
+Black Friday simulada, com pico de **2.826 req/s** (3× a capacidade estimada de uma
+réplica). Mediana de três execuções:
 
 | | 1 réplica | 4 réplicas, round-robin | 4 réplicas, `least_conn` |
 |---|---|---|---|
-| Vazão no pico | 642 req/s | 1.685–2.173 req/s | 1.728 req/s |
-| Visitantes descartados | 410.441 | 122.671–211.686 | 202.872 |
-| Mediana da duração | 1,9 s | 7,5–55 ms | 709 ms |
-| p95 navegação | 2,36 s | 1,88–2,26 s | **0,97 s** |
-| Pior caso | 5,26 s | 4,83–5,49 s | **2,50 s** |
-| Réplicas saturadas | 1 de 1 | 1–2 de 4 | 4 de 4 |
+| Vazão no pico | 919 req/s | 2.494 req/s | 2.648 req/s |
+| Dentro do SLO (500 ms) | 0 % | 75 % | 83 % |
+| Visitantes descartados | 358.987 | 60.769 | 31.790 |
+| Mediana da duração | 1,39 s | **2,1 ms** | 323 ms |
+| p95 navegação | 1,55 s | 2,03 s | **0,50 s** |
+| Pior caso | 3,59 s | 4,39 s | **1,45 s** |
 
-- **Escalar aumentou a capacidade** de 2,6 a 3,4 vezes, mas o crescimento não foi linear:
-  as réplicas dividem a mesma CPU e o mesmo banco.
-- **O round-robin gerou réplicas presas na fila**: com a mesma carga, algumas réplicas
-  ficaram logo abaixo do limite e outras passaram dele e não voltaram (teoria de filas,
-  ρ ≈ 1).
-- **O `least_conn` dividiu a fila por igual** e cortou o pior caso pela metade, mas não
-  aumentou a vazão. **O balanceador não cria capacidade: só decide quem espera.**
-- **A rede não foi o gargalo**: quase todo o tempo de cada requisição foi espera pelo
-  primeiro byte; conexão, envio e recebimento somaram frações de milissegundo.
+- **Escalar aumentou a vazão** de 2,7 a 2,9 vezes com 4 réplicas: o crescimento não foi
+  linear.
+- **No round-robin, ao menos uma réplica saturou em cada execução**, mesmo recebendo a
+  mesma taxa que as outras, que ficaram 100 % dentro do SLO.
+- **O `least_conn` reduziu a cauda à custa da mediana.** A vantagem em vazão e SLO está
+  dentro da variação entre execuções.
+- **Com folga (pico de 1.413 req/s), os dois métodos foram equivalentes**, com 100 % no
+  SLO. **O balanceador não cria capacidade: só decide quem espera.**
+- **No trecho entre o cliente e o Nginx, a rede não foi o gargalo**: quase todo o tempo foi
+  espera pelo primeiro byte.
+
+Testado num Ryzen 5 4500 (6 núcleos, 12 threads) com cada réplica limitada a 0,5 CPU e
+256 MB: [ambiente completo](docs/08-ambiente-de-testes.md).
 
 <div align="center">
 
 **`rate()` de 1 minuto × 10 minutos durante o pico** (consulta do enunciado na UI nativa)
 
-<img src="docs/img/fig-5-2-rate-1m-vs-10m.png" width="85%" alt="rate de 1m e 10m sobrepostos">
+<img src="docs/img/fig-r2-1rep-rate-1m-vs-10m.png" width="85%" alt="rate de 1m e 10m sobrepostos">
 
 **Conexões abertas por réplica: round-robin (esq.) × `least_conn` (dir.)**
 
-<img src="docs/img/fig-6b-conexoes-por-replica.png" width="49%" alt="conexões por réplica com round-robin">
-<img src="docs/img/fig-6c-conexoes-por-replica.png" width="49%" alt="conexões por réplica com least_conn">
+<img src="docs/img/fig-r2-4rr-conexoes-por-replica.png" width="49%" alt="conexões por réplica com round-robin">
+<img src="docs/img/fig-r2-4lc-conexoes-por-replica.png" width="49%" alt="conexões por réplica com least_conn">
 
 </div>
 
@@ -261,6 +265,7 @@ rate(process_cpu_seconds_total{job="api"}[1m])
 | [5. Black Friday com 1 réplica](docs/05-black-friday-1-replica.md) | Resultados por camada, `rate()` de 1 min × 10 min, decomposição do tempo |
 | [6. Escalando para 4 réplicas](docs/06-escalando-4-replicas.md) | Round-robin × `least_conn`, teoria de filas |
 | [7. Escalonamento planejado](docs/07-cenario-escalonamento-planejado.md) | Planejamento de capacidade e intervenção manual guiada pelo Prometheus |
+| [8. Ambiente de testes](docs/08-ambiente-de-testes.md) | Máquina, contêineres, procedimento e validade das execuções |
 
 ## 🗺️ Próximos passos
 
@@ -276,4 +281,5 @@ rate(process_cpu_seconds_total{job="api"}[1m])
 - Todas as réplicas compartilham um único PostgreSQL: escalar a API não escala o banco.
 - A loja não tem controle de estoque nem transações; problemas como venda acima do
   estoque (*overselling*) ficam fora do escopo.
-- Cada configuração de teste foi executada uma vez; repetições dariam margens de erro.
+- Cada cenário foi executado três vezes: mostra a variação, mas é pouco para testes
+  estatísticos.
