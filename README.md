@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛒 Black Friday Autoscaling
+# 🛒 Black Friday Scaling
 
 **Observabilidade com Prometheus e escalonamento de uma loja virtual sob o pico da Black Friday**
 
