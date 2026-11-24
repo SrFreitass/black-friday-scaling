@@ -359,6 +359,53 @@ permite um diagnóstico:
 | Aplicação | API (`/metrics`) | como a API está atendendo? | RED |
 | Infraestrutura | Node Exporter | a máquina aguenta? | USE (*Utilization, Saturation, Errors*), Brendan Gregg |
 
+### Os métodos RED e USE
+
+As métricas foram escolhidas e organizadas segundo dois métodos
+complementares, que funcionam como listas do que medir.
+
+**RED** (Tom Wilkie, 2018) se aplica a **serviços**, tudo o que atende
+requisições, e descreve o ponto de vista de quem usa o serviço:
+
+| Letra | Pergunta | Métrica neste trabalho |
+|---|---|---|
+| **R**ate (taxa) | quantas requisições estão sendo atendidas? | `rate(nginx_http_requests_total[1m])` e `rate(http_request_duration_seconds_count[1m])` |
+| **E**rrors (erros) | quantas falham? | requisições com status 5xx; `http_req_failed` no k6 |
+| **D**uration (duração) | quanto tempo levam? | `histogram_quantile(0.95, ...)` sobre `http_request_duration_seconds_bucket` |
+
+**USE** (Brendan Gregg, 2012) se aplica a **recursos**, aquilo que é consumido
+para atender (CPU, memória, disco, rede), e descreve o estado do recurso:
+
+| Letra | Pergunta | Métrica neste trabalho |
+|---|---|---|
+| **U**tilization (utilização) | que fração do tempo o recurso está ocupado? | CPU da réplica, `rate(process_cpu_seconds_total[1m])` (limite: 0,5 núcleo); CPU da máquina, pelo Node Exporter |
+| **S**aturation (saturação) | há trabalho esperando pelo recurso? | requisições em andamento na réplica (`process_open_fds`) e atraso do *event loop* (`nodejs_eventloop_lag_seconds`) |
+| **E**rrors (erros) | o recurso está falhando? | processo encerrado por falta de memória (*OOMKilled*) |
+
+A distinção entre utilização e saturação é central: um recurso pode estar 100 %
+ocupado sem ninguém esperando por ele, e o serviço continua rápido. A espera,
+e portanto a latência sentida pelo cliente, começa quando há **saturação**: o
+recurso está ocupado e o trabalho se acumula numa fila. É a mesma distinção
+da teoria de filas entre utilização (ρ) e tamanho da fila.
+
+Os dois métodos se complementam no diagnóstico: **o RED mostra que há um
+problema, e o USE indica qual recurso o causa.** No teste de Black Friday com
+uma réplica (seção 5):
+
+1. **RED, o sintoma:** a duração disparou (p95 de 11,6 ms para 3,7 s) e a taxa
+   parou de crescer em ~640 req/s, embora a demanda fosse de 2.826 req/s. Os
+   erros ficaram em 0 %: a API não falhou, ficou lenta.
+2. **USE, a causa:** a CPU da réplica ficou cravada em 0,5 núcleo (utilização
+   no limite), com 1.431 requisições em andamento e o *event loop* atrasado
+   (saturação). A CPU da máquina ficou em 22 %: o recurso esgotado era o limite
+   da réplica, e não a máquina.
+
+O diagnóstico aponta a ação: há espaço na máquina para mais réplicas, o que foi
+testado na seção 6.
+
+Referências: Tom Wilkie, *The RED Method: How to Instrument Your Services*
+(Grafana Labs, 2018); Brendan Gregg, *The USE Method* (2012).
+
 **A camada da aplicação.** O `stub_status` só fornece contagens: com ele se
 obtém requisições por segundo, mas **não o tempo de resposta**, que o enunciado
 também pede. As opções avaliadas:
