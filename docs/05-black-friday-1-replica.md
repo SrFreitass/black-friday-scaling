@@ -1,31 +1,30 @@
 # 5. Teste de Black Friday com uma réplica
 
 > Rascunho de documentação do processo, para virar seção do artigo.
-> Teste executado em 2026-11-24, das 10:05:08 às 10:10:33 (UTC−4;
-> 14:05:08–14:10:33 UTC).
+> Valores: mediana de três execuções [mínimo–máximo]. Ambiente e procedimento na
+> seção 8. Figuras e séries temporais: primeira execução, 19:19:06–19:24:28 UTC de
+> 2026-11-24.
 
 ## 5.1 Objetivo
 
 Observar, pelas métricas coletadas pelo Prometheus, o comportamento do sistema
 quando o tráfego salta de repente para muito acima da capacidade de **uma
-única réplica** da API. Este é o cenário de referência ("antes") para os testes
-com mais réplicas.
+única réplica** da API. Este é o cenário de referência para os testes com mais
+réplicas.
 
 ## 5.2 Desenho do teste
 
-Arquivo `k6/src/tests/black-friday.ts`. Todas as taxas são múltiplos da
-capacidade medida de uma réplica, calculada em `k6/src/lib/capacity.ts`:
+Arquivo `k6/src/tests/black-friday.ts`. As taxas são múltiplos da capacidade
+medida de uma réplica, calculada em `k6/src/lib/capacity.ts`:
 
 | Grandeza | Valor | Origem |
 |---|---|---|
-| Capacidade de leitura (`GET /products`) | 1100 req/s | medida no teste de ruptura (2026-11-23) |
-| Capacidade de compra (`POST /orders`) | 600 req/s | medida no teste de ruptura |
-| Mistura de tráfego | 80 % navegação, 20 % compra | premissa: a maioria dos visitantes só navega |
+| Capacidade de leitura (`GET /products`) | 1.100 req/s | medida em 2026-11-23, com 50 VUs |
+| Capacidade de compra (`POST /orders`) | 600 req/s | medida em 2026-11-23, com 50 VUs |
+| Mistura de tráfego | 80 % navegação, 20 % compra | premissa |
 | Capacidade para o tráfego misto | **942 req/s** | 1 ÷ (0,8 ÷ 1100 + 0,2 ÷ 600) |
-| Tráfego normal (véspera) | 283 req/s | 30 % da capacidade |
-| Pico (meia-noite) | **2.826 req/s** | 3× a capacidade de uma réplica |
-
-Linha do tempo (5 min 20 s):
+| Tráfego normal | 283 req/s | 30 % da capacidade |
+| Pico | **2.826 req/s** | 3× a capacidade de uma réplica |
 
 | Fase | Duração | Taxa |
 |---|---|---|
@@ -35,319 +34,168 @@ Linha do tempo (5 min 20 s):
 | fim da corrida | 10 s | volta a 283 req/s |
 | recuperação | 1 min | 283 req/s |
 
-O teste usa o modelo **aberto** do k6 (`ramping-arrival-rate`): a taxa de
-chegada é fixada, independentemente de o servidor responder ou não, como
-acontece com visitantes reais. O número máximo de usuários virtuais vem da lei
-de Little (VUs = taxa × tempo de resposta), usando o SLO (0,5 s) como tempo de
-resposta: 1.131 VUs para navegação e 283 para compra. Quando todos os VUs estão
-ocupados esperando resposta, o k6 não consegue iniciar novas requisições e as
-conta como `dropped_iterations`: visitantes que nem conseguiram entrar.
-
-O tráfego passa pelo Nginx (porta 80), e o Prometheus coleta os quatro alvos a
-cada 15 s.
+O teste usa o modelo **aberto** do k6 (`ramping-arrival-rate`): a taxa de chegada
+não depende de o servidor responder. O número máximo de usuários virtuais vem da
+lei de Little (VUs = taxa × tempo de resposta) com o SLO de 0,5 s: 1.131 VUs para
+navegação e 283 para compra. Com todos ocupados, o k6 conta as requisições que não
+conseguiu iniciar como `dropped_iterations`, aqui chamadas de visitantes
+descartados.
 
 ## 5.3 Resultados no cliente (k6)
 
 | Métrica | Valor | SLO |
 |---|---|---|
-| Requisições atendidas | 163.289 | |
-| Requisições com erro | 0 (0,00 %) | < 1 % ✓ |
-| p95 navegação | 2,36 s | < 0,5 s ✗ |
-| p95 compra | 4,51 s | < 0,5 s ✗ |
-| Visitantes descartados (`dropped_iterations`) | **410.441** | 0 ✗ |
-| VUs simultâneos (máximo) | 1.414 | |
+| Requisições atendidas | 214.743 [211.745–215.781] | |
+| Requisições com erro | 0 | < 1 % ✓ |
+| Mediana da duração | 1,39 s [1,38–1,40] | |
+| p95 navegação | 1,55 s [1,52–1,57] | < 0,5 s ✗ |
+| p95 compra | 3,06 s [2,99–3,07] | < 0,5 s ✗ |
+| Duração máxima | 3,59 s [3,57–3,87] | |
+| Visitantes descartados | **358.987** [357.947–361.984] | 0 ✗ |
 
-O k6 registrou o esgotamento dos VUs 6 a 8 segundos depois do início da subida
-(`Insufficient VUs, reached 283 active VUs` às 10:06:18 na compra; 1.131 às
-10:06:20 na navegação).
-
-A API **não devolveu erros**: ela ficou lenta. Como cada VU espera a resposta
-antes de enviar a próxima requisição, a lentidão prendeu todos os VUs, e o
-restante da demanda foi descartado. Numa Black Friday real, os 410 mil
-descartes correspondem a clientes que desistiram da página.
+A API **não devolveu erros**: ficou lenta. Os 1.414 VUs se esgotaram 6 a 7 segundos
+depois do início da subida, e o restante da demanda foi descartado.
 
 ## 5.4 Resultados no Prometheus
 
-### Borda: Nginx
+`rate(nginx_http_requests_total)` na primeira execução (0 s = 19:19:06 UTC; a
+promoção abre em 61 s):
 
-`rate(nginx_http_requests_total[1m])`, a cada 30 s (horário UTC−4):
-
-| 10:05:30 | 10:06:00 | 10:06:30 | 10:07:00 | 10:07:30 | 10:08:00 | 10:08:30 | 10:09:00 | 10:09:30 | 10:10:00 | 10:10:30 | 10:11:00 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 80 | 226 | 451 | **723** | 653 | 634 | 620 | 627 | 626 | 438 | 283 | 122 |
-
-A demanda no pico era de 2.826 req/s, mas a vazão estabilizou em **~620–650
-req/s**: esse é o teto efetivo de uma réplica nesta configuração. As conexões
-ativas no Nginx chegaram a **1.415**, praticamente o número de VUs do k6.
-
-### Aplicação: API
+| Janela | 60 s | 90 s | 120 s | 150 s | 180 s | 210 s | 240 s | 270 s | 300 s | 330 s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 min | 276 | 570 | 890 | 878 | 908 | 931 | 948 | 902 | 450 | 275 |
+| 10 min | 25 | 62 | 107 | 152 | 199 | 247 | 296 | 341 | 355 | 369 |
 
 | Métrica | Repouso | Pico | Consulta |
 |---|---|---|---|
-| CPU da réplica | 0,009 núcleo | **0,500 núcleo** (o limite) | `rate(process_cpu_seconds_total{job="api"}[1m])` |
-| p95 `GET /products` | 11,6 ms | **3,7 s** | `histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="api"}[1m])))` |
-| p95 `POST /orders` | 65 ms | **6,9 s** | idem |
-| Requisições dentro do SLO | 100 % | **0 %** (10:07:15) | bucket `le="0.5"` ÷ `_count` |
-| *Event loop lag* | 5 ms | 93 ms | `nodejs_eventloop_lag_seconds` |
-| Memória | 66 MB | 121 MB (limite: 256 MB) | `process_resident_memory_bytes` |
-| Descritores abertos | 7 | 1.431 | `process_open_fds` |
+| Vazão no platô | | **919 req/s** [894–920] | `rate(nginx_http_requests_total[140s])` |
+| Requisições dentro do SLO (platô) | 100 % | **0 %** nas três | bucket `le="0.5"` ÷ `_count` |
+| CPU da réplica | 0,01 | **0,50** (o limite) | `rate(process_cpu_seconds_total{job="api"}[1m])` |
+| *Event loop lag* (máximo) | | 21 a 67 ms | `nodejs_eventloop_lag_seconds` |
+| Memória (máximo) | 58 MB | 121 a 122 MB | `process_resident_memory_bytes` |
+| Descritores abertos (máximo) | 7 | 1.431 | `process_open_fds` |
+| Conexões de clientes no Nginx | 1 | 1.415 | `nginx_connections_active` |
+| CPU da máquina | < 1 % | 19 % [19–20], média no pico | Node Exporter |
 
-Vazão por rota no pico: 621 req/s em `/products` e 81 req/s em `/orders`.
-
-### Infraestrutura: Node Exporter
-
-| Métrica | Pico |
-|---|---|
-| CPU da máquina | entre 9 % e 22 % |
+**Sobre percentis no Prometheus.** A latência exata vem do k6. O
+`histogram_quantile` interpola dentro do *bucket*, e os limites padrão são largos
+acima de 1 s (1–2,5, 2,5–5 e 5–10 s). Numa rodada anterior, a consulta indicou p95
+de 6,9 s em `/orders`, acima do máximo de 5,26 s visto pelo k6, o que é impossível.
+A fração dentro do SLO não tem esse erro, porque 0,5 s é um limite de *bucket*.
 
 ## 5.5 Análise
 
 ### A réplica saturou, a máquina não
 
-A CPU da réplica ficou cravada em 0,5 núcleo, o limite configurado, enquanto a
-CPU da máquina não passou de 22 %. O valor da máquina inclui o próprio k6, que
-roda no mesmo computador. Uma decisão de escalonamento baseada na CPU da
-máquina (Node Exporter) não perceberia a saturação. A métrica certa é a da
-réplica (`process_cpu_seconds_total`) ou, melhor ainda, a que o usuário sente:
-a latência por rota.
+A CPU da réplica chegou ao limite de 0,5, enquanto a da máquina ficou em 19 %,
+incluindo o próprio k6. Uma decisão de escalonamento baseada na CPU da máquina não
+perceberia a saturação.
 
-### A fila entrou na aplicação
+### A vazão confirmou a capacidade estimada
 
-Mesmo medida **dentro** da API, a latência chegou a segundos. As 1.400
-requisições simultâneas foram aceitas pelo processo (1.431 descritores abertos,
-um por conexão com o Nginx) e passaram a disputar o *event loop* e as **10
-conexões do pool do PostgreSQL** (tamanho padrão do `pg`). A espera por uma
-conexão do pool acontece dentro do intervalo medido pelo Fastify. A teoria de
-filas aparece diretamente nos dados: a vazão parou de crescer (CPU no limite),
-e todo o excedente virou tempo de espera.
+A réplica sustentou 919 req/s, **98 % dos 942 estimados**. As medições das duas
+operações em separado previram bem a vazão do tráfego misto de uma réplica isolada.
 
-### A mistura de tráfego mudou no pico
+### A fila e a lei de Little
 
-O tráfego planejado era 80/20, mas a vazão no pico foi de 621 req/s em
-navegação e 81 req/s em compra (88/12). A lei de Little explica: o cenário de
-compra tinha no máximo 283 VUs, e com cada compra levando ~3,6 s (mediana),
-eles sustentam 283 ÷ 3,6 ≈ 79 req/s, próximo dos 81 observados. As compras,
-mais lentas (duas consultas ao banco), foram mais estranguladas.
+A vazão parou de crescer e o excedente virou espera. No platô da primeira execução
+foram 818 req/s de navegação e 102 de compra. Com todos os VUs ocupados, a lei de
+Little prevê tempos de 1.131 ÷ 818 = 1,38 s e 283 ÷ 102 = 2,77 s. As medianas do k6
+foram 1,37 s e 2,69 s.
+
+A mistura observada (89/11) difere da planejada (80/20) porque o limite de VUs de
+compra se esgota com menos requisições: cada compra leva o dobro do tempo.
 
 ### Janela de 1 minuto e janela de 10 minutos
 
-| Instante | `rate(...[1m])` | `rate(...[10m])` |
-|---|---|---|
-| 10:07:00 (pico) | 723 req/s | **83 req/s** |
-| 10:10:30 (fim) | 283 req/s | 271 req/s |
-| 10:11:30 (depois) | 0 | 276 req/s |
-
-No auge do pico, a janela de 10 minutos ainda mostrava 83 req/s, e só se
-aproximou do valor real depois que o teste terminou. A janela de 10 minutos,
-pedida no enunciado, mostra a **tendência** do período; para **reagir** a um
-pico de 3 minutos, é necessária a janela de 1 minuto, a mesma usada para
-derivar o intervalo de coleta de 15 s (seção 3.6).
+Aos 120 s, 1 minuto após a abertura, a janela de 1 minuto já mostrava 890 req/s, e
+a de 10 minutos, 107. Ao fim do pico, aos 255 s, a de 10 minutos ainda marcava 321
+contra 961. A janela de 10 minutos, pedida no enunciado, mostra a **tendência**;
+para **reagir** a um pico de 3 minutos é preciso uma janela curta.
 
 ### As camadas concordam
 
-| Medida | Valor |
+| Fonte (primeira execução) | Requisições |
 |---|---|
-| Requisições enviadas pelo k6 | 163.289 |
-| `increase(nginx_http_requests_total[10m])` ao fim do teste | 163.580 |
-| `rate(nginx_http_requests_total[10m])` ao fim do teste | 272,6 req/s |
-| `sum(rate(http_request_duration_seconds_count{job="api"}[10m]))` | 272,1 req/s |
+| k6 | 215.781 |
+| API | 215.781 |
+| Nginx | 215.804 (+23 coletas do exporter) |
 
-A diferença entre k6 e Nginx (~0,2 %) corresponde às coletas do próprio
-exporter, que também contam como requisições. A taxa vista pelo Nginx e pela
-API coincide: nenhuma requisição se perdeu entre o proxy e a aplicação.
+### Onde o tempo foi gasto
 
-### Vazão abaixo da capacidade estimada
+Fases de cada requisição vistas pelo k6, na primeira execução:
 
-A capacidade estimada para o tráfego misto era de 942 req/s, mas a vazão
-sustentada ficou em ~620–650 req/s. Hipóteses, **ainda não verificadas**:
+| Fase | Métrica | Média | p95 |
+|---|---|---|---|
+| espera por conexão livre | `http_req_blocked` | 10 µs | 10 µs |
+| *handshake* TCP | `http_req_connecting` | 3 µs | 0 |
+| envio | `http_req_sending` | 32 µs | 59 µs |
+| **espera pelo primeiro byte** | `http_req_waiting` | **1,27 s** | **2,75 s** |
+| recebimento | `http_req_receiving` | 98 µs | 149 µs |
 
-1. **O Nginx no caminho.** Os testes de ruptura que mediram 1100 e 600 req/s
-   acessavam a API diretamente. Por padrão, o Nginx abre uma conexão TCP nova
-   com a API para cada requisição (HTTP/1.0 com o *upstream*), um custo que não
-   existia nas medições.
-2. **A mistura real foi diferente.** Com 88/12 em vez de 80/20, a conta da
-   capacidade mista muda (embora para cima, já que leitura é mais barata).
-3. **Concorrência muito maior.** Os testes de ruptura usaram poucas dezenas de
-   VUs; aqui foram 1.400 conexões simultâneas, com o custo de manter todas
-   abertas e a disputa pelo pool do banco.
-4. **O k6 dividindo a máquina** com o sistema testado.
-
-Repetir o teste de ruptura através do Nginx isolaria a primeira hipótese.
+Quase todo o tempo é espera pela resposta. No trecho **entre o k6 e o Nginx**, a
+rede não foi o gargalo: a transferência média foi de 2,2 MB/s. O trecho entre o
+Nginx e a API não foi medido em separado, mas a CPU da réplica no limite indica que
+a espera está nela.
 
 ## 5.6 Figuras
 
-Capturas da UI nativa do Prometheus (aba *Query*, modo *Graph*, intervalo de
-8 min terminando às 14:12:30 UTC). **A UI exibe os horários em UTC**: o teste
-vai de 14:05 a 14:10:33 nos gráficos (10:05 a 10:10:33 no horário local,
-UTC−4, usado nas tabelas acima).
+Os gráficos do Prometheus estão em UTC; os do k6, no horário local (UTC−4).
 
-### Figura 5.1: taxa de requisições nos últimos 10 minutos (consulta do enunciado)
+### Figura 5.1: taxa dos últimos 10 minutos (consulta do enunciado)
 
-![rate(nginx_http_requests_total[10m])](img/fig-5-1-rate-10m.png)
+![rate de 10 minutos](img/fig-r2-1rep-rate-10m.png)
 
 ```promql
 rate(nginx_http_requests_total[10m])
 ```
 
-A taxa média dos últimos 10 minutos sobe em degraus de 15 s (um por coleta) e
-só se estabiliza em ~275 req/s depois do fim do teste, quando a janela passa a
-conter o evento inteiro.
+### Figura 5.2: janela de 1 minuto e de 10 minutos
 
-### Figura 5.2: janela de 1 minuto e janela de 10 minutos
+![rate de 1 e 10 minutos](img/fig-r2-1rep-rate-1m-vs-10m.png)
 
-![rate de 1m e 10m sobrepostos](img/fig-5-2-rate-1m-vs-10m.png)
+### Figura 5.3: requisições dentro do SLO
 
-```promql
-label_replace(rate(nginx_http_requests_total[1m]), "janela", "1m", "", "")
-  or label_replace(rate(nginx_http_requests_total[10m]), "janela", "10m", "", "")
-```
+![dentro do SLO](img/fig-r2-1rep-slo-total.png)
 
-A UI do Prometheus mostra uma expressão por painel; para sobrepor as duas
-janelas, cada série recebe um label `janela` com `label_replace`, e as duas são
-unidas com `or`. A janela de 1 minuto acompanha o pico (subida às 14:06,
-máximo de 723 req/s às 14:07, platô de ~620 req/s, queda às 14:10); a de 10
-minutos mal reage durante o evento.
+A fração chega a 0 % cerca de 1 minuto após a abertura, o tamanho da janela da
+consulta.
 
-### Figura 5.3: p95 da latência por rota, medido na API
+### Figura 5.4: CPU da réplica
 
-![p95 por rota](img/fig-5-3-p95-por-rota.png)
+![CPU da réplica](img/fig-r2-1rep-cpu-replica.png)
 
-```promql
-histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="api", route!="unmatched"}[1m])))
-```
+### Figura 5.5: CPU da máquina
 
-Em segundos. Antes do pico, poucos milissegundos; durante o pico, ~2,4 s em
-`/products` e ~4,9 s em `/orders`, com máximo de 3,7 s e 6,9 s por volta das
-14:08. A compra, com duas consultas ao banco, sofre mais.
+![CPU da máquina](img/fig-r2-1rep-cpu-maquina.png)
 
-### Figura 5.4: porcentagem de requisições dentro do SLO (500 ms)
+### Figura 5.6: visão geral do k6
 
-![requisições dentro do SLO](img/fig-5-4-dentro-do-slo.png)
+![k6: visão geral](img/fig-r2-1rep-k6-visao-geral.png)
 
-```promql
-100 * sum(rate(http_request_duration_seconds_bucket{job="api", le="0.5"}[1m]))
-    / sum(rate(http_request_duration_seconds_count{job="api"}[1m]))
-```
+### Figura 5.7: usuários virtuais e transferência
 
-Cálculo exato graças ao bucket `le="0.5"`. A fração cai de 100 % para 0 % em
-cerca de 45 s depois da abertura da promoção e só volta a 100 % às 14:10:25,
-depois do fim da corrida.
+![k6: VUs](img/fig-r2-1rep-k6-vus.png)
 
-### Figura 5.5: CPU da réplica
+### Figura 5.8: duração das requisições
 
-![CPU da réplica](img/fig-5-5-cpu-replica.png)
+![k6: duração](img/fig-r2-1rep-k6-duracao.png)
 
-```promql
-rate(process_cpu_seconds_total{job="api"}[1m])
-```
+### Figura 5.9: taxa e espera pelo primeiro byte
 
-Em núcleos. A réplica sobe até 0,5 núcleo, o limite do contêiner, e fica
-cravada ali das 14:07 às 14:09:40.
+![k6: espera](img/fig-r2-1rep-k6-espera.png)
 
-### Figura 5.6: CPU da máquina
+### Figura 5.10: conexão e recebimento
 
-![CPU da máquina](img/fig-5-6-cpu-maquina.png)
+![k6: conexão](img/fig-r2-1rep-k6-conexao.png)
 
-```promql
-100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[1m])))
-```
+### Figura 5.11: resumo do k6
 
-Em porcentagem dos 12 núcleos. No mesmo período em que a réplica estava no
-limite (Figura 5.5), a máquina não passou de 22 %, valor que inclui o próprio
-k6.
+![k6: resumo](img/fig-r2-1rep-k6-resumo.png)
 
-### Figuras do k6 (visão do cliente)
+## 5.7 Rodada anterior
 
-Recortes do painel do k6 (*web dashboard*); o relatório completo está em
-`docs/img/k6-relatorio-5-1-replica.png`. **O k6 exibe os horários no fuso local
-(UTC−4)**: o pico começa às 10:06:12.
-
-#### Figura 5.7: visão geral
-
-![k6: visão geral](img/fig-5-7-k6-visao-geral.png)
-
-Taxa de requisições (verde, eixo esquerdo) e p95 da duração (azul, eixo
-direito). A taxa salta com a abertura da promoção e estabiliza entre 600 e 700
-req/s; o p95 sobe junto e fica em torno de 4 s até o fim do pico. A taxa de
-falhas (roxo) permanece em zero.
-
-#### Figura 5.8: usuários virtuais e taxa de transferência
-
-![k6: VUs e transferência](img/fig-5-8-k6-vus.png)
-
-Os VUs saltam para o máximo (1.414) em poucos segundos e ficam presos ali até o
-fim do pico: todos esperando resposta. A transferência no pico ficou em ~2 MB/s
-(540 MB no total, ~3,3 kB por resposta), muito abaixo da capacidade de qualquer
-interface de rede: **a rede não foi o gargalo**.
-
-#### Figura 5.9: duração das requisições
-
-![k6: duração](img/fig-5-9-k6-duracao.png)
-
-Média, p90, p95 e p99 da duração vista pelo cliente. A média passa de
-milissegundos para ~2 s, e o p99 chega a ~5 s.
-
-#### Figura 5.10: taxa de requisições e tempo de espera
-
-![k6: taxa e espera](img/fig-5-10-k6-espera.png)
-
-`http_req_waiting` é o tempo entre o fim do envio da requisição e o primeiro
-byte da resposta (*time to first byte*). O gráfico é praticamente idêntico ao
-da duração total (Figura 5.9).
-
-#### Figura 5.11: tempo de conexão e de recebimento
-
-![k6: conexão e recebimento](img/fig-5-11-k6-conexao.png)
-
-`http_req_connecting` é o tempo do *handshake* TCP. Ele só aparece no instante
-em que os VUs novos abrem suas conexões (10:06:20, p99 de ~780 µs) e depois cai
-a zero: o k6 reaproveita as conexões (HTTP keep-alive). `http_req_receiving`,
-o tempo para receber o corpo da resposta, ficou abaixo de 0,4 ms durante todo
-o teste.
-
-#### Figura 5.12: resumo do teste
-
-![k6: resumo](img/fig-5-12-k6-resumo.png)
-
-#### Decomposição do tempo de uma requisição
-
-O k6 divide a duração de cada requisição nas fases do protocolo:
-
-| Fase | Métrica do k6 | Média | p95 |
-|---|---|---|---|
-| espera por uma conexão livre no cliente | `http_req_blocked` | 13 µs | 12 µs |
-| *handshake* TCP | `http_req_connecting` | 4 µs | 0 |
-| *handshake* TLS | `http_req_tls_handshaking` | 0 (HTTP sem TLS) | 0 |
-| envio da requisição | `http_req_sending` | 43 µs | 80 µs |
-| **espera pela resposta (TTFB)** | `http_req_waiting` | **1 s** | **3 s** |
-| recebimento da resposta | `http_req_receiving` | 137 µs | 212 µs |
-
-Praticamente todo o tempo está na **espera pelo primeiro byte**: a requisição
-chegou ao servidor e ficou na fila. As fases de rede (conexão, envio,
-recebimento) somam frações de milissegundo. Isso localiza o gargalo do lado do
-servidor, e não na rede, e é consistente com a réplica no limite de CPU
-(Figura 5.5).
-
-O tempo de espera visto pelo cliente inclui a passagem pelo Nginx e a fila
-antes do *event loop* da API; o histograma da API (Figura 5.3) mede apenas o
-processamento dentro dela. Os dois têm a mesma ordem de grandeza (segundos)
-porque, neste teste, a fila principal ficou **dentro** da API: as conexões
-foram aceitas e as requisições disputaram o *event loop* e o pool de conexões
-do banco.
-
-### Como as capturas foram feitas
-
-As imagens foram geradas abrindo a URL de cada consulta da UI do Prometheus num
-navegador Chromium sem interface (*headless*), por exemplo:
-
-```
-http://localhost:9090/query?g0.expr=rate(nginx_http_requests_total[10m])&g0.tab=graph&g0.range_input=8m&g0.end_input=2026-11-24 14:12:30
-```
-
-Os dados ficam na TSDB por 15 dias (retenção padrão), então as mesmas
-consultas podem ser refeitas na UI até 2026-12-09. As figuras do k6 são
-recortes de uma captura de página inteira do painel do k6.
-
-## 5.7 Efeitos colaterais
-
-As compras do teste inseriram cerca de 21,7 mil pedidos na tabela `orders`.
+Uma primeira execução única, com o k6 fora dos contêineres (pela porta publicada do
+Docker Desktop), deu 642 req/s no platô e p95 de 2,36 s e 4,51 s. A diferença para
+os 919 req/s é consistente com um custo no caminho pela porta publicada, mas os dois
+caminhos não foram comparados nas mesmas condições, então a causa não está provada.
