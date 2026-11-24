@@ -156,7 +156,7 @@ Prometheus avalia regras de alerta (`alerting rules`) com as mesmas consultas
 acima e, por meio do Alertmanager, avisa a equipe quando um limite é cruzado.
 O passo seguinte é automatizar também a **decisão e a ação**: o mesmo ciclo
 de consulta, comparação com um limite e ajuste de réplicas, executado por um
-programa. É o que o KEDA faz (seção 8).
+programa. É o que fazem ferramentas como o KEDA, no Kubernetes (trabalho futuro).
 
 ## 7.7 Limites do escalonamento planejado
 
@@ -171,9 +171,9 @@ riscos:
 - **Manter réplicas extras custa.** Em nuvem, cada réplica tem custo por hora,
   mesmo ociosa.
 
-Isso motiva o próximo cenário: **escalonamento reativo**, em que o próprio
+Isso motiva, como **trabalho futuro**, o **escalonamento reativo**, em que o próprio
 sistema observa as métricas coletadas pelo Prometheus e ajusta o número de
-réplicas conforme a demanda (KEDA, seção 8).
+réplicas conforme a demanda (por exemplo, com o KEDA no Kubernetes).
 
 As duas abordagens se complementam: o planejamento define uma **base** para o
 pico esperado, e a reação automática cobre o que a previsão não alcançou. Uma

@@ -431,11 +431,10 @@ Foi adotada a instrumentação da API, descrita na seção 4.
 4. **Node Exporter com `/proc` do host.** A montagem recomendada para servidores
    Linux não funciona no Docker Desktop (seção 3.5).
 
-## 3.11 Próximo passo
+## 3.11 A consulta do enunciado
 
-Depois da instrumentação da API (seção 4), gerar tráfego com o k6 e executar,
-na UI nativa, a consulta pedida no
-enunciado: a taxa de crescimento dos acessos HTTP nos últimos 10 minutos,
+A taxa de crescimento dos acessos HTTP nos últimos 10 minutos foi calculada na UI
+nativa durante a Black Friday simulada (seção 5, Figuras 5.1 e 5.2):
 
 ```promql
 rate(nginx_http_requests_total[10m])

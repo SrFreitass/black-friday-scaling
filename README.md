@@ -19,8 +19,6 @@ Trabalho da **P2 de Redes de Computadores**: *Prometheus, 13. A Teia de Métrica
 ![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
 ![Disciplina](https://img.shields.io/badge/Redes_de_Computadores-P2-blue?style=flat-square)
-![Status](https://img.shields.io/badge/status-em_andamento-yellow?style=flat-square)
-![Próximo passo](https://img.shields.io/badge/próximo_passo-KEDA_+_k3s-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 
 </div>
 
@@ -62,8 +60,8 @@ Trabalho da **P2 de Redes de Computadores**: *Prometheus, 13. A Teia de Métrica
 | **Escalar os contêineres a tempo** | Testes com 1 e 4 réplicas, round-robin × `least_conn`, cenário de escalonamento planejado | [seções 6](docs/06-escalando-4-replicas.md) e [7](docs/07-cenario-escalonamento-planejado.md) |
 
 **Além do enunciado:** testes de carga com k6 (fumaça, ruptura e Black Friday), números
-derivados de medições e da lei de Little, descoberta de serviço por DNS e, como próximo
-passo, autoescalonamento com KEDA.
+derivados de medições e da lei de Little, descoberta de serviço por DNS e cruzamento das
+contagens entre cliente, Nginx e API.
 
 ## 🏗️ Arquitetura
 
@@ -191,8 +189,8 @@ Testado num Ryzen 5 4500 (6 núcleos, 12 threads) com cada réplica limitada a 0
 
 ## 🚀 Como executar
 
-**Pré-requisitos:** Docker com Compose, [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/)
-e [Bun](https://bun.sh) (só para editar o código e os testes localmente).
+**Pré-requisitos:** Docker com Compose. O [Bun](https://bun.sh) só é necessário para editar o
+código localmente.
 
 ```bash
 docker compose up -d --build
@@ -212,20 +210,19 @@ docker compose up -d --scale api=4
 
 ### Testes de carga
 
+O k6 roda em contêiner, na rede do Compose. O `--no-deps` mantém o ambiente como está,
+inclusive o número de réplicas.
+
 ```bash
-cd k6
+docker compose run --rm --no-deps k6 run src/tests/smoke.ts
 ```
 
 ```bash
-k6 run src/tests/smoke.ts
+docker compose run --rm --no-deps k6 run -e TARGET=read src/tests/breakpoint.ts
 ```
 
 ```bash
-k6 run -e TARGET=read src/tests/breakpoint.ts
-```
-
-```bash
-K6_WEB_DASHBOARD=true K6_WEB_DASHBOARD_EXPORT=black-friday.html k6 run src/tests/black-friday.ts
+docker compose run --rm --no-deps -e K6_WEB_DASHBOARD=true -e K6_WEB_DASHBOARD_EXPORT=black-friday.html k6 run src/tests/black-friday.ts
 ```
 
 | Teste | Pergunta que responde |
@@ -267,13 +264,11 @@ rate(process_cpu_seconds_total{job="api"}[1m])
 | [7. Escalonamento planejado](docs/07-cenario-escalonamento-planejado.md) | Planejamento de capacidade e intervenção manual guiada pelo Prometheus |
 | [8. Ambiente de testes](docs/08-ambiente-de-testes.md) | Máquina, contêineres, procedimento e validade das execuções |
 
-## 🗺️ Próximos passos
+## 🔭 Trabalhos futuros
 
-- [x] Loja, Nginx, exporters e Prometheus no Docker Compose
-- [x] Testes de carga e Black Friday com 1 e 4 réplicas
-- [x] Cenário 1: escalonamento planejado
-- [ ] Cenário 2: autoescalonamento com **KEDA** no Kubernetes local (k3s via k3d), disparado por PromQL
-- [ ] Gerador de carga em contêiner, na mesma rede do sistema
+- Autoescalonamento com **KEDA** no Kubernetes (k3s), disparado por consultas PromQL.
+- Gerador de carga em outra máquina, sem disputar CPU com o sistema.
+- Controle de admissão (HTTP 429 ou 503) para o tráfego acima da capacidade.
 
 ## ⚠️ Limitações
 

@@ -359,9 +359,9 @@ volta dos contadores a zero como *reset*.
    isolamento; sem ele, o histograma ficaria vazio sem nenhum erro. A versão
    final usa uma função comum que recebe a instância do Fastify.
 
-## 4.10 Pendências
+## 4.10 Uso nos testes
 
-- Testar com várias réplicas (`docker compose up -d --scale api=3`) e confirmar
-  um alvo por réplica no job `api`.
-- Medir sob carga: latência por rota, CPU por réplica, memória e *event loop
-  lag* durante os testes de ruptura e de Black Friday.
+- **Várias réplicas:** com 4 réplicas, o job `api` passou a ter 4 alvos (seção 6).
+- **Sob carga:** CPU, memória, *event loop lag* e fração no SLO foram medidos na Black
+  Friday (seções 5 e 6). Os percentis vêm do k6, porque os *buckets* padrão são largos
+  acima de 1 s (seção 5.4).
