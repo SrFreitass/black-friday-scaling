@@ -1,0 +1,14 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "devDependencies": {
+        "@types/k6": "^2.3.1",
+      },
+    },
+  },
+  "packages": {
+    "@types/k6": ["@types/k6@2.4.0", "", {}, "sha512-FGJAyfzNyYiSdWbMjT89k4ltFM0A2Hoq/VMUp0sBA9AjU8M0e/uilJkvv12MHW/KZ3nK3SVyv30IKD4rzjaiOg=="],
+  }
+}
